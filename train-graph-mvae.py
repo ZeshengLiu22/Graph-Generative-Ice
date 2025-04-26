@@ -46,12 +46,12 @@ if __name__ == "__main__":
     mean_features = torch.tensor([ 
         7.4666e+01, -4.3115e+01,  5.6084e+01,  1.8426e-01,  2.4458e+02,
         3.7355e-01,  9.3855e-04,  2.5639e+01,  3.0965e+02,  3.3909e+03],
-        dtype=torch.float64)
+        dtype=torch.float64, device=device)
     
     std_features = torch.tensor([
     1.5720e+00, 4.6361e+00, 1.6982e+01, 5.1707e-02, 1.6345e+00, 
     1.6973e+00, 4.4164e-03, 1.7188e-01, 4.1240e+00, 2.5931e+02], 
-    dtype=torch.float64)
+    dtype=torch.float64, device=device)
 
     # Initialize model
     model = GraphMVAE(node_feature_dim=10, hidden_dim=64, latent_dim=32, num_graphs=20).to(device)
@@ -88,8 +88,8 @@ if __name__ == "__main__":
             # Reconstruction loss
             recon_loss = 0
             for idx, x_recon in recon_layers:
-                target = graph_list[idx].x * std_features.to(device) + mean_features.to(device)
-                x_recon_denorm = x_recon * std_features.to(device) + mean_features.to(device)
+                target = graph_list[idx].x * std_features + mean_features
+                x_recon_denorm = x_recon * std_features + mean_features
                 
                 recon_loss += F.mse_loss(x_recon_denorm, target)
 

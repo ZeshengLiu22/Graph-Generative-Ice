@@ -55,51 +55,66 @@ def apply_mask(graph_list, mask_prob=0.15, strategy='random'):
 
 def baseline_neighbor_avg_fill(graph_list, mask_matrix):
     '''
-    Baseline fill: for masked nodes, use the average of neighboring nodes (index-based).
+    Improved baseline fill: contiguous masked nodes are filled using the average of 
+    the nearest valid neighbors on both sides.
+    
     Args:
         graph_list: original unmasked graphs (ground truth).
         mask_matrix: boolean mask (T, N), True = masked node.
     Returns:
-        mse_baseline: mean squared error of baseline fill.
+        mse_thickness: mean squared error for thickness.
+        mse_physical: mean squared error for physical features.
     '''
 
-    T, N = mask_matrix.shape # (20, 256)
-    gt = torch.stack([g.x for g in graph_list], dim=0) # (20, 256, 10)
-    filled_thickness = gt[:, :, 2].clone() # (20, 256, 7)
-    filled_physical = gt[:, :, 3:10].clone() # (20, 256, 1)
-
+    T, N = mask_matrix.shape  # (20, 256)
+    gt = torch.stack([g.x for g in graph_list], dim=0)  # (20, 256, 10)
+    filled_thickness = gt[:, :, 2].clone()  # (20, 256)
+    filled_physical = gt[:, :, 3:10].clone()  # (20, 256, 7)
 
     mse_thick_total = 0.0
     mse_phys_total = 0.0
     count = 0
 
     for t in range(T):
-        for n in range(N):
+        n = 0
+        while n < N:
             if mask_matrix[t, n]:
-                neighbors_thick = []
-                neighbors_phys = []
+                # Start of a contiguous NaN block
+                start_idx = n
+                while n < N and mask_matrix[t, n]:
+                    n += 1
+                end_idx = n - 1  # inclusive
 
-                if n > 0:
-                    neighbors_thick.append(filled_thickness[t, n-1].item())
-                    neighbors_phys.append(filled_physical[t, n-1].cpu().numpy())
-                if n < N - 1:
-                    neighbors_thick.append(filled_thickness[t, n+1].item())
-                    neighbors_phys.append(filled_physical[t, n+1].cpu().numpy())
+                # Find valid neighbors
+                left_idx = start_idx - 1 if start_idx > 0 else None
+                right_idx = n if n < N else None
 
-                if neighbors_thick and neighbors_phys:
-                    avg_thick = sum(neighbors_thick) / len(neighbors_thick)
+                valid_thick = []
+                valid_phys = []
 
-                    neighbors_phys_array = np.stack(neighbors_phys, axis=0)
-                    avg_phys = np.mean(neighbors_phys_array, axis=0)
+                if left_idx is not None and not mask_matrix[t, left_idx]:
+                    valid_thick.append(filled_thickness[t, left_idx].item())
+                    valid_phys.append(filled_physical[t, left_idx].cpu().numpy())
 
+                if right_idx is not None and not mask_matrix[t, right_idx]:
+                    valid_thick.append(filled_thickness[t, right_idx].item())
+                    valid_phys.append(filled_physical[t, right_idx].cpu().numpy())
 
-                    mse_thick_total += (avg_thick - gt[t, n, 2].item()) ** 2
-                    mse_phys_total += np.sum((avg_phys - gt[t, n, 3:10].cpu().numpy()) ** 2)
+                if valid_thick and valid_phys:
+                    avg_thick = sum(valid_thick) / len(valid_thick)
+                    avg_phys = np.mean(np.stack(valid_phys, axis=0), axis=0)
 
-                    count += 1
+                    for i in range(start_idx, end_idx + 1):
+                        mse_thick_total += (avg_thick - gt[t, i, 2].item()) ** 2
+                        mse_phys_total += np.sum((avg_phys - gt[t, i, 3:10].cpu().numpy()) ** 2)
+                        count += 1
+                # else: no valid neighbors, skip this block
 
-    mse_thickness = mse_thick_total / count if count > 0 else 0.0
-    mse_physical = mse_phys_total / (count * 7) if count > 0 else 0.0
+            else:
+                n += 1  # Move to the next node
+
+    mse_thickness = mse_thick_total / count if count > 0 else float('nan')
+    mse_physical = mse_phys_total / (count * 7) if count > 0 else float('nan')
 
     return mse_thickness, mse_physical
 
@@ -135,25 +150,25 @@ if __name__ == "__main__":
     if mode == 'mae_pretrain':
         dataset = load_dill('data-l2-pretrain/dataset')
         
-        # mean_features = torch.tensor([ 
-        #     7.4666e+01, -4.3115e+01,  5.6084e+01,  1.8426e-01,  2.4458e+02,
-        #     3.7355e-01,  9.3855e-04,  2.5639e+01,  3.0965e+02,  3.3909e+03],
-        #     dtype=torch.float64)
-
         mean_features = torch.tensor([ 
-        7.6795e+01, -4.9625e+01,  5.8094e+01,  2.1486e-01,  2.4549e+02,
-        1.3217e+00,  3.4205e-03,  2.5664e+01,  3.1252e+02,  3.0169e+03],
-        dtype=torch.float64)
+            7.4666e+01, -4.3115e+01,  5.6084e+01,  1.8426e-01,  2.4458e+02,
+            3.7355e-01,  9.3855e-04,  2.5639e+01,  3.0965e+02,  3.3909e+03],
+            dtype=torch.float64)
 
-        # std_features = torch.tensor([
-        #     1.5720e+00, 4.6361e+00, 1.6982e+01, 5.1707e-02, 1.6345e+00, 
-        #     1.6973e+00, 4.4164e-03, 1.7188e-01, 4.1240e+00, 2.5931e+02], 
-        #     dtype=torch.float64)
+        # mean_features = torch.tensor([ 
+        # 7.6795e+01, -4.9625e+01,  5.8094e+01,  2.1486e-01,  2.4549e+02,
+        # 1.3217e+00,  3.4205e-03,  2.5664e+01,  3.1252e+02,  3.0169e+03],
+        # dtype=torch.float64)
 
         std_features = torch.tensor([
-        8.7640e-01, 5.2234e+00, 1.9439e+01, 7.6635e-02, 1.9833e+00, 3.4144e+00,
-        8.8475e-03, 1.9078e-01, 5.5896e+00, 2.8551e+02], 
-        dtype=torch.float64)
+            1.5720e+00, 4.6361e+00, 1.6982e+01, 5.1707e-02, 1.6345e+00, 
+            1.6973e+00, 4.4164e-03, 1.7188e-01, 4.1240e+00, 2.5931e+02], 
+            dtype=torch.float64)
+
+        # std_features = torch.tensor([
+        # 8.7640e-01, 5.2234e+00, 1.9439e+01, 7.6635e-02, 1.9833e+00, 3.4144e+00,
+        # 8.8475e-03, 1.9078e-01, 5.5896e+00, 2.8551e+02], 
+        # dtype=torch.float64)
     else:
         dataset = load_dill('data-l2-nan/dataset')
         mean_features = torch.tensor([ 
