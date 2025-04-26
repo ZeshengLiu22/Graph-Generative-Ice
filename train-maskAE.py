@@ -53,23 +53,32 @@ def apply_mask(graph_list, mask_prob=0.15, strategy='random'):
 
     return masked_graph_list, mask_matrix
 
-def baseline_neighbor_avg_fill(graph_list, mask_matrix):
+def baseline_neighbor_avg_fill(graph_list, mask_matrix, mean_features, std_features):
     '''
     Improved baseline fill: contiguous masked nodes are filled using the average of 
-    the nearest valid neighbors on both sides.
-    
+    the nearest valid neighbors on both sides, with GPU support.
+
     Args:
         graph_list: original unmasked graphs (ground truth).
         mask_matrix: boolean mask (T, N), True = masked node.
+        mean_features: mean of each feature (Tensor, shape [10], on device).
+        std_features: std of each feature (Tensor, shape [10], on device).
     Returns:
-        mse_thickness: mean squared error for thickness.
-        mse_physical: mean squared error for physical features.
+        mse_thickness: mean squared error for thickness (denormalized scale).
+        mse_physical: mean squared error for physical features (denormalized scale).
     '''
 
+    device = mean_features.device  # Assume mean/std already on correct device
+
     T, N = mask_matrix.shape  # (20, 256)
-    gt = torch.stack([g.x for g in graph_list], dim=0)  # (20, 256, 10)
+    gt = torch.stack([g.x for g in graph_list], dim=0).to(device)  # (20, 256, 10)
     filled_thickness = gt[:, :, 2].clone()  # (20, 256)
     filled_physical = gt[:, :, 3:10].clone()  # (20, 256, 7)
+
+    std_thickness = std_features[2]
+    mean_thickness = mean_features[2]
+    std_phys = std_features[3:10]
+    mean_phys = mean_features[3:10]
 
     mse_thick_total = 0.0
     mse_phys_total = 0.0
@@ -86,27 +95,39 @@ def baseline_neighbor_avg_fill(graph_list, mask_matrix):
                 end_idx = n - 1  # inclusive
 
                 # Find valid neighbors
-                left_idx = start_idx - 1 if start_idx > 0 else None
-                right_idx = n if n < N else None
-
                 valid_thick = []
                 valid_phys = []
 
+                left_idx = start_idx - 1 if start_idx > 0 else None
+                right_idx = n if n < N else None
+
                 if left_idx is not None and not mask_matrix[t, left_idx]:
-                    valid_thick.append(filled_thickness[t, left_idx].item())
-                    valid_phys.append(filled_physical[t, left_idx].cpu().numpy())
+                    valid_thick.append(filled_thickness[t, left_idx])
+                    valid_phys.append(filled_physical[t, left_idx])
 
                 if right_idx is not None and not mask_matrix[t, right_idx]:
-                    valid_thick.append(filled_thickness[t, right_idx].item())
-                    valid_phys.append(filled_physical[t, right_idx].cpu().numpy())
+                    valid_thick.append(filled_thickness[t, right_idx])
+                    valid_phys.append(filled_physical[t, right_idx])
 
                 if valid_thick and valid_phys:
-                    avg_thick = sum(valid_thick) / len(valid_thick)
-                    avg_phys = np.mean(np.stack(valid_phys, axis=0), axis=0)
+                    # Convert lists to tensors and compute mean
+                    valid_thick_tensor = torch.stack(valid_thick, dim=0).to(device)  # (num_valid,)
+                    valid_phys_tensor = torch.stack(valid_phys, dim=0).to(device)    # (num_valid, 7)
+
+                    avg_thick_norm = valid_thick_tensor.mean()
+                    avg_phys_norm = valid_phys_tensor.mean(dim=0)  # (7,)
+
+                    # === Denormalize avg values ===
+                    avg_thickness_denorm = avg_thick_norm * std_thickness + mean_thickness  # scalar
+                    avg_phys_denorm = avg_phys_norm * std_phys + mean_phys  # (7,)
 
                     for i in range(start_idx, end_idx + 1):
-                        mse_thick_total += (avg_thick - gt[t, i, 2].item()) ** 2
-                        mse_phys_total += np.sum((avg_phys - gt[t, i, 3:10].cpu().numpy()) ** 2)
+                        gt_thickness_denorm = gt[t, i, 2] * std_thickness + mean_thickness  # scalar
+                        gt_phys_denorm = gt[t, i, 3:10] * std_phys + mean_phys  # (7,)
+
+                        # Accumulate MSE
+                        mse_thick_total += (avg_thickness_denorm - gt_thickness_denorm).pow(2).item()
+                        mse_phys_total += (avg_phys_denorm - gt_phys_denorm).pow(2).sum().item()
                         count += 1
                 # else: no valid neighbors, skip this block
 
@@ -117,6 +138,7 @@ def baseline_neighbor_avg_fill(graph_list, mask_matrix):
     mse_physical = mse_phys_total / (count * 7) if count > 0 else float('nan')
 
     return mse_thickness, mse_physical
+
 
     
 if __name__ == "__main__":
@@ -148,7 +170,7 @@ if __name__ == "__main__":
 
     # Load the dataset, and set the mean and std for normalization
     if mode == 'mae_pretrain':
-        dataset = load_dill('data-l2-pretrain/dataset')
+        dataset = load_dill('data-pretrain/dataset')
         
         mean_features = torch.tensor([ 
             7.4666e+01, -4.3115e+01,  5.6084e+01,  1.8426e-01,  2.4458e+02,
@@ -170,7 +192,7 @@ if __name__ == "__main__":
         # 8.8475e-03, 1.9078e-01, 5.5896e+00, 2.8551e+02], 
         # dtype=torch.float64)
     else:
-        dataset = load_dill('data-l2-nan/dataset')
+        dataset = load_dill('data-nan/dataset')
         mean_features = torch.tensor([ 
             7.6361e+01, -4.5710e+01, float('nan'), 1.7543e-01, 2.4448e+02,
             4.1272e-01,  1.0003e-03, 2.5617e+01,  3.1043e+02,  3.1965e+03],
@@ -220,7 +242,7 @@ if __name__ == "__main__":
                 masked_graphs, mask_matrix = apply_mask(graph_list, strategy='nan')
 
             # Baseline fill
-            baseline_thickness, baseline_physical = baseline_neighbor_avg_fill(original_graph_list, mask_matrix)
+            baseline_thickness, baseline_physical = baseline_neighbor_avg_fill(original_graph_list, mask_matrix, mean_features, std_features)
             baseline_thickness_total += baseline_thickness
             baseline_physical_total += baseline_physical
 
