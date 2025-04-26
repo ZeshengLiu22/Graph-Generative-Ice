@@ -10,6 +10,7 @@ from torch_geometric.loader import DataLoader
 import os
 import torch.nn.functional as F
 import copy
+from torch.cuda.amp import autocast, GradScaler
 
 
 
@@ -59,7 +60,12 @@ if __name__ == "__main__":
 
     # Optimizer and LR scheduler
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5, verbose=True, min_lr=1e-6
+    )
+    # lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+    # Gradient scaler for mixed precision training
+    scaler = GradScaler()
 
     # Train loop
     model.train()
@@ -81,27 +87,29 @@ if __name__ == "__main__":
             a = random.randint(1, 8) 
             mask = [True] * (model.num_graphs - a) + [False] * a
 
+            with autocast():
+                # Forward pass
+                recon_layers, mu, logvar = model(graph_list, mask)
 
-            # Forward pass
-            recon_layers, mu, logvar = model(graph_list, mask)
+                # Reconstruction loss
+                recon_loss = 0
+                for idx, x_recon in recon_layers:
+                    target = graph_list[idx].x * std_features + mean_features
+                    x_recon_denorm = x_recon * std_features + mean_features
+                    
+                    recon_loss += F.mse_loss(x_recon_denorm, target)
 
-            # Reconstruction loss
-            recon_loss = 0
-            for idx, x_recon in recon_layers:
-                target = graph_list[idx].x * std_features + mean_features
-                x_recon_denorm = x_recon * std_features + mean_features
-                
-                recon_loss += F.mse_loss(x_recon_denorm, target)
+                # KL divergence
+                kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
-            # KL divergence
-            kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-
-            # Total loss
-            loss = recon_loss + 0.001 * kl_loss
+                # Total loss
+                loss = recon_loss + 0.001 * kl_loss
 
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
             total_loss += loss.item()
             total_recon += recon_loss.item()
             total_kl += kl_loss.item()
@@ -110,8 +118,8 @@ if __name__ == "__main__":
         avg_loss = total_loss / len(loader)
         avg_recon = total_recon / len(loader)
         avg_kl = total_kl / len(loader)
-        print(f"Epoch {epoch+1}/{args.epochs}, Loss: {avg_loss:.4f}, Recon Loss: {avg_recon:.4f}, KL Loss: {avg_kl:.4f}")
-        lr_scheduler.step()
+        print(f"Epoch {epoch+1}/{args.epochs}, Number of Masked Layers: {a}, Loss: {avg_loss:.4f}, Recon Loss: {avg_recon:.4f}, KL Loss: {avg_kl:.4f}")
+        lr_scheduler.step(avg_recon)
 
     # Save the model
     os.makedirs('model_weights', exist_ok=True)
