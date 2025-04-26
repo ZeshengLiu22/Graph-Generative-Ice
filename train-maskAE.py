@@ -10,6 +10,7 @@ from torch_geometric.loader import DataLoader
 import os
 import torch.nn.functional as F
 import copy
+from torch.cuda.amp import autocast, GradScaler
 
 # def save_dill(obj, path):
 #     with open(path, "wb") as dill_file:
@@ -219,6 +220,9 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
+    # If using mixed precision training
+    scaler = GradScaler()
+
     # Training loop
     model.train()
     for epoch in tqdm(range(epochs)):
@@ -250,32 +254,35 @@ if __name__ == "__main__":
             mask_matrix = mask_matrix.to(device)
             gt = torch.stack([g.x.float() for g in original_graph_list], dim=0).to(device)
 
-            pred_thickness, pred_phys = model(masked_graphs)
+            with autocast():
+                pred_thickness, pred_phys = model(masked_graphs)
 
-            # Denormalize the predictions
-            pred_thickness_denorm = pred_thickness * std_features[2].to(device) + mean_features[2].to(device)
-            pred_phys_denorm = pred_phys * std_features[3:10].to(device) + mean_features[3:10].to(device)
-            gt_thickness_denorm = gt[:, :, 2:3] * std_features[2].to(device) + mean_features[2].to(device)
-            gt_phys_denorm = gt[:, :, 3:10] * std_features[3:10].to(device) + mean_features[3:10].to(device)
+                # Denormalize the predictions
+                pred_thickness_denorm = pred_thickness * std_features[2].to(device) + mean_features[2].to(device)
+                pred_phys_denorm = pred_phys * std_features[3:10].to(device) + mean_features[3:10].to(device)
+                gt_thickness_denorm = gt[:, :, 2:3] * std_features[2].to(device) + mean_features[2].to(device)
+                gt_phys_denorm = gt[:, :, 3:10] * std_features[3:10].to(device) + mean_features[3:10].to(device)
 
-            if mode == 'mae_pretrain':
-                # Loss is calculated both on thickness and physical features
-                loss_thickness = F.mse_loss(pred_thickness_denorm[mask_matrix], gt_thickness_denorm[mask_matrix])
-                loss_phys = F.mse_loss(pred_phys_denorm[mask_matrix], gt_phys_denorm[mask_matrix])
-                loss = loss_thickness + loss_phys
+                if mode == 'mae_pretrain':
+                    # Loss is calculated both on thickness and physical features
+                    loss_thickness = F.mse_loss(pred_thickness_denorm[mask_matrix], gt_thickness_denorm[mask_matrix])
+                    loss_phys = F.mse_loss(pred_phys_denorm[mask_matrix], gt_phys_denorm[mask_matrix])
+                    loss = loss_thickness + loss_phys
 
-                model_thickness_total += loss_thickness.item()
-                model_physical_total += loss_phys.item()
-            else:
-                # Fine-tuning on data-nan or directly training on data-nan
-                # Now loss is only calculated on physical features
-                loss = F.mse_loss(pred_phys_denorm[mask_matrix], gt_phys_denorm[mask_matrix])
-                model_physical_total += loss.item()
-                model_thickness_total += 0.0
+                    model_thickness_total += loss_thickness.item()
+                    model_physical_total += loss_phys.item()
+                else:
+                    # Fine-tuning on data-nan or directly training on data-nan
+                    # Now loss is only calculated on physical features
+                    loss = F.mse_loss(pred_phys_denorm[mask_matrix], gt_phys_denorm[mask_matrix])
+                    model_physical_total += loss.item()
+                    model_thickness_total += 0.0
 
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            
             total_loss += loss.item()
 
         avg_loss = total_loss / len(loader)
