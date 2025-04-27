@@ -29,7 +29,7 @@ class GraphMVAE(nn.Module):
         self.encoder = SAGEConv(node_feature_dim, hidden_dim)
 
         # GRU to process temporal sequence of graph-level embeddings
-        self.gru = nn.GRU(hidden_dim, hidden_dim, batch_first=True)
+        self.rnn = nn.LSTM(hidden_dim, hidden_dim, batch_first=True)
 
         # Fully connected layers to project GRU output into latent mean and log-variance.
         self.fc_mu = nn.Linear(hidden_dim, latent_dim)
@@ -40,7 +40,7 @@ class GraphMVAE(nn.Module):
         self.decoder_fc = nn.Linear(latent_dim + num_graphs * hidden_dim, hidden_dim)
 
         # SAGEConv layer to reconstruct node features from masked layers.
-        self.decoder_gnn = SAGEConv(hidden_dim, node_feature_dim)
+        self.decoder_gnn = SAGEConv(hidden_dim, 1)
 
     def encode(self, graph_list, mask):
         '''
@@ -73,8 +73,8 @@ class GraphMVAE(nn.Module):
         node_seq = torch.stack(node_reprs).unsqueeze(0)
 
         # Process sequence using GRU to capture temporal dependencies
-        _, h = self.gru(node_seq)  # h shape: (1, batch_size=1, hidden_dim)
-        h = h.squeeze(0) # Remove batch dimension: shape (hidden_dim,)
+        _, (h_n, c_n) = self.rnn(node_seq)  # h shape: (1, batch_size=1, hidden_dim)
+        h = h_n.squeeze(0) # Remove batch dimension: shape (hidden_dim,)
 
         # Compute latent mean and log-variance
         mu = self.fc_mu(h)
@@ -126,13 +126,17 @@ class GraphMVAE(nn.Module):
         reconstructed_layers = []
 
         edge_index = graph_list[0].edge_index
+        lat_lon = graph_list[0].x[:, 0:2] # Extract lat/lon from the first graph
         for i, data in enumerate(graph_list):
             if not mask[i]: # Only reconstruct masked layers
                 # Repeat dec_input for each node in the graph (shape: num_nodes x hidden_dim)
                 dec_node_input = dec_input.unsqueeze(0).repeat(data.x.size(0), 1)
 
-                # Reconstruct node features using SAGEConv
+                # Reconstruct node features(no lat/lon) using SAGEConv
                 reconstructed_x = self.decoder_gnn(dec_node_input, edge_index)
+
+                # Concatenate lat/lon with reconstructed features
+                reconstructed_x = torch.cat((lat_lon, reconstructed_x), dim=1)
 
                 # Store the reconstructed node features with their layer index
                 reconstructed_layers.append((i, reconstructed_x))
@@ -142,7 +146,9 @@ class GraphMVAE(nn.Module):
             template_data = graph_list[-1]  # Use last graph's structure
             dec_node_input = dec_input.unsqueeze(0).repeat(template_data.x.size(0), 1)
             reconstructed_x = self.decoder_gnn(dec_node_input, edge_index)
+            reconstructed_x = torch.cat((lat_lon, reconstructed_x), dim=1)
             reconstructed_layers.append((i, reconstructed_x))
+
 
         return reconstructed_layers
 
