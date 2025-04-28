@@ -57,12 +57,19 @@ if __name__ == "__main__":
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=5, verbose=True, min_lr=1e-6
+        optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6
     )
     scaler = GradScaler()
 
     # Train loop
     model.train()
+    # Best model
+    best_loss = float('inf')
+    best_model = None
+    # Early stopping parameters
+    patience = 20
+    patience_counter = 0
+
     for epoch in tqdm(range(args.epochs)):
         total_loss = 0
         total_recon_denorm = 0
@@ -145,6 +152,21 @@ if __name__ == "__main__":
         print(f"Geo Loss (Denorm): {avg_geo_loss_denorm:.4f}, Thickness Loss (Denorm): {avg_thickness_loss_denorm:.4f}, Physical Loss (Denorm): {avg_physical_loss_denorm:.4f}")
         lr_scheduler.step(avg_loss)
 
+        # Save the best model
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            best_model = model.state_dict()
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(f"Early stopping triggered at epoch {epoch+1}.")
+                break
+
+    # Save the best model after training
     os.makedirs('model_weights', exist_ok=True)
-    torch.save(model.state_dict(), 'model_weights/autoreg_graph.pth')
-    print("Autoregressive Model saved to model_weights/autoreg_graph.pth")
+    if best_model is not None:
+        torch.save(best_model, 'model_weights/autoreg_graph.pth')
+        print("Best model saved to model_weights/autoreg_graph.pth")
+    else:
+        print("No model was saved.")

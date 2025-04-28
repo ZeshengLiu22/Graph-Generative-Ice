@@ -12,6 +12,10 @@ import torch.nn.functional as F
 import copy
 from torch.cuda.amp import autocast, GradScaler
 
+# def save_dill(obj, path):
+#     with open(path, "wb") as dill_file:
+#         dill.dump(obj, dill_file)
+
 def load_dill(path):
     with open(path, "rb") as dill_file:
         return dill.load(dill_file)
@@ -174,11 +178,20 @@ if __name__ == "__main__":
             3.7355e-01,  9.3855e-04,  2.5639e+01,  3.0965e+02,  3.3909e+03],
             dtype=torch.float64)
 
+        # mean_features = torch.tensor([ 
+        # 7.6795e+01, -4.9625e+01,  5.8094e+01,  2.1486e-01,  2.4549e+02,
+        # 1.3217e+00,  3.4205e-03,  2.5664e+01,  3.1252e+02,  3.0169e+03],
+        # dtype=torch.float64)
+
         std_features = torch.tensor([
             1.5720e+00, 4.6361e+00, 1.6982e+01, 5.1707e-02, 1.6345e+00, 
             1.6973e+00, 4.4164e-03, 1.7188e-01, 4.1240e+00, 2.5931e+02], 
             dtype=torch.float64)
 
+        # std_features = torch.tensor([
+        # 8.7640e-01, 5.2234e+00, 1.9439e+01, 7.6635e-02, 1.9833e+00, 3.4144e+00,
+        # 8.8475e-03, 1.9078e-01, 5.5896e+00, 2.8551e+02], 
+        # dtype=torch.float64)
     else:
         dataset = load_dill('data/nan/dataset')
         mean_features = torch.tensor([ 
@@ -205,13 +218,21 @@ if __name__ == "__main__":
             raise FileNotFoundError(f"Pretrained weights file not found: {args.pretrained_weights}")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6
+    )
 
     # If using mixed precision training
     scaler = GradScaler()
 
     # Training loop
     model.train()
+    best_model = None
+    best_loss = float('inf')
+    # Early stopping parameters
+    patience = 15
+    patience_counter = 0
+
     for epoch in tqdm(range(epochs)):
         total_loss = 0
         baseline_thickness_total = 0
@@ -232,10 +253,10 @@ if __name__ == "__main__":
             else:
                 masked_graphs, mask_matrix = apply_mask(graph_list, strategy='nan')
 
-            # Baseline fill
-            baseline_thickness, baseline_physical = baseline_neighbor_avg_fill(original_graph_list, mask_matrix, mean_features, std_features)
-            baseline_thickness_total += baseline_thickness
-            baseline_physical_total += baseline_physical
+            # # Baseline fill
+            # baseline_thickness, baseline_physical = baseline_neighbor_avg_fill(original_graph_list, mask_matrix, mean_features, std_features)
+            # baseline_thickness_total += baseline_thickness
+            # baseline_physical_total += baseline_physical
 
             masked_graphs = [graph.to(device) for graph in masked_graphs]
             mask_matrix = mask_matrix.to(device)
@@ -252,8 +273,8 @@ if __name__ == "__main__":
 
                 if mode == 'mae_pretrain':
                     # Loss is calculated both on thickness and physical features
-                    loss_thickness = F.mse_loss(pred_thickness_denorm[mask_matrix], gt_thickness_denorm[mask_matrix])
-                    loss_phys = F.mse_loss(pred_phys_denorm[mask_matrix], gt_phys_denorm[mask_matrix])
+                    loss_thickness = F.l1_loss(pred_thickness_denorm[mask_matrix], gt_thickness_denorm[mask_matrix])
+                    loss_phys = F.l1_loss(pred_phys_denorm[mask_matrix], gt_phys_denorm[mask_matrix])
                     loss = loss_thickness + loss_phys
 
                     model_thickness_total += loss_thickness.item()
@@ -273,21 +294,35 @@ if __name__ == "__main__":
             total_loss += loss.item()
 
         avg_loss = total_loss / len(loader)
-        avg_baseline_thickness = baseline_thickness_total / len(loader)
-        avg_baseline_physical = baseline_physical_total / len(loader)
+        # avg_baseline_thickness = baseline_thickness_total / len(loader)
+        # avg_baseline_physical = baseline_physical_total / len(loader)
         avg_model_thickness = model_thickness_total / len(loader)
         avg_model_physical = model_physical_total / len(loader)
         print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}, "
-              f"Baseline Thickness: {avg_baseline_thickness:.4f}, "
-              f"Baseline Physical: {avg_baseline_physical:.4f}, "
+            #   f"Baseline Thickness: {avg_baseline_thickness:.4f}, "
+            #   f"Baseline Physical: {avg_baseline_physical:.4f}, "
               f"Model Thickness: {avg_model_thickness:.4f}, "
               f"Model Physical: {avg_model_physical:.4f}")
-        lr_scheduler.step()
+        lr_scheduler.step(avg_loss)
+
+        # Save the model if the loss is lower than the best loss
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            best_model = copy.deepcopy(model.state_dict())
+            print(f"New best model found!")
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            print(f"Patience counter: {patience_counter}/{patience}")
+            if patience_counter >= patience:
+                print("Early stopping triggered.")
+                break
 
     
-    # Final save of the model
-    print("Finishing training, saving model...")
-    torch.save(model.state_dict(), f"model_weights/{mode}_final_model.pth")
-    print("Model saved successfully.")
+    os.makedirs('model_weights', exist_ok=True)
+    # Save the best model weights
+    torch.save(best_model, 'model_weights/mae_graph.pth')
+    print("Model saved to model_weights/mae_graph.pth")
+
     
 
