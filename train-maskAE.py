@@ -12,10 +12,6 @@ import torch.nn.functional as F
 import copy
 from torch.cuda.amp import autocast, GradScaler
 
-# def save_dill(obj, path):
-#     with open(path, "wb") as dill_file:
-#         dill.dump(obj, dill_file)
-
 def load_dill(path):
     with open(path, "rb") as dill_file:
         return dill.load(dill_file)
@@ -171,29 +167,20 @@ if __name__ == "__main__":
 
     # Load the dataset, and set the mean and std for normalization
     if mode == 'mae_pretrain':
-        dataset = load_dill('data-pretrain/dataset')
+        dataset = load_dill('data/perfect/dataset')
         
         mean_features = torch.tensor([ 
             7.4666e+01, -4.3115e+01,  5.6084e+01,  1.8426e-01,  2.4458e+02,
             3.7355e-01,  9.3855e-04,  2.5639e+01,  3.0965e+02,  3.3909e+03],
             dtype=torch.float64)
 
-        # mean_features = torch.tensor([ 
-        # 7.6795e+01, -4.9625e+01,  5.8094e+01,  2.1486e-01,  2.4549e+02,
-        # 1.3217e+00,  3.4205e-03,  2.5664e+01,  3.1252e+02,  3.0169e+03],
-        # dtype=torch.float64)
-
         std_features = torch.tensor([
             1.5720e+00, 4.6361e+00, 1.6982e+01, 5.1707e-02, 1.6345e+00, 
             1.6973e+00, 4.4164e-03, 1.7188e-01, 4.1240e+00, 2.5931e+02], 
             dtype=torch.float64)
 
-        # std_features = torch.tensor([
-        # 8.7640e-01, 5.2234e+00, 1.9439e+01, 7.6635e-02, 1.9833e+00, 3.4144e+00,
-        # 8.8475e-03, 1.9078e-01, 5.5896e+00, 2.8551e+02], 
-        # dtype=torch.float64)
     else:
-        dataset = load_dill('data-nan/dataset')
+        dataset = load_dill('data/nan/dataset')
         mean_features = torch.tensor([ 
             7.6361e+01, -4.5710e+01, float('nan'), 1.7543e-01, 2.4448e+02,
             4.1272e-01,  1.0003e-03, 2.5617e+01,  3.1043e+02,  3.1965e+03],

@@ -1,67 +1,39 @@
 # Graph-Generative-Ice
 DSCI-498 Project: Graph generative model for radargram and internal ice layer
 
+## Project description:
 
-## Goal:
+In order to predict the deeper ice layer thickness, ih previous work, we represent each internal ice layer as a spatial graph and use a graph neural network that learns from the top 5 ice layers and predict for the underlying 15 layers. However, due to the limitations of radar measurements and various physical processes, layers may be discontinued at certain points (NaNs in the measurements) and total number of layers may vary across different locations. Previously, we do a data pre-processing that only keeps those radargrams with at least 20 layer. This is effective, but it significantly reduce the total number of valid radargrams.
 
-The goal of our project is to generate additional training data to make it able to evaluate model’s on different type of regions.
+In this project, we are trying to figure out whether generative model can be useful in expanding the number of valid radargrams. This includes two parts---If a data has 20 layers but with some NaNs, then we need to proper fill in the missing values. If a data has less than 20 layers and these layers may also have NaNs, we will first fill existing NaNs with some simple methods and then use generative model to generative synthetic layers.
 
-Currently, some radargram has 20 complete layer, some radargram has 20 layers but with NaNs, and some radargram has less than 20 layers.
+## Dataset descriptions:
 
+The dataset is collected using an airborne snow radar developed by CReSIS, capable of penetrating thick polar ice sheets to capture internal ice layers. Radargrams are generated from reflected signal strength, with each radargram having a depth of 1200–1700 pixels and a fixed width of 256 pixels. Internal ice layers are manually labeled, and layer thickness is calculated based on pixel differences between layer boundaries. Data is collected along various flight paths over key regions of the polar ice sheet for comprehensive spatial coverage.
 
-## Tasks of our project:
+## Required Packages:
 
-### Task 1: Filling NaNs in current data files.
+**PyTorch**
 
-**Model Input**: 
+**PyTorch Geometric**
 
-**$X_{masked}$** : Node feature matrix with some values randomly masked (set to NaN or 0)
+hdf5
 
-**Mask**: A 0-1 binary matrix, where 1 means the value is observed; 0 means the value is masked.
+dill
 
-**Radargram image I**: The original radargram image
+tqdm
 
-**Model Output**:
+numpy
 
-Y: The fully observed matrix without masking
+random
 
-**Loss function**:
+argparse
 
-Mean Squared Error Loss
+## How to run the code:
 
-
-
-
-### Task 2: Generating synthetic data files
-
-**Model Input**:
-
-Noise vector 
-
-Radargram image I: The original radargram image
-
-**Model Output**:
-
-Synthetic feature matrix
-
-### Task 3: Combine two tasks.
-
-Assume we have a feature matrix (256, 15), and some value are NaNs.
-
-First, we can fill in NaNs using the model for task 1.
-
-Then, we can generate five additional layers using current known 15 layers, instead of generating 20 layers.
+### Data Generation:
 
 
 
-
-## Dataset
-
-We will use the snow radar dataset created by CReSIS.
-
-It contains radargram across L1, L2, L3 regions.
-
-L1 is the test data from central Greenland assumed to be mostly dry snow zone
-L2 contains echogram from the transition from Greenland Summit to the NE coast.
-L3 contains echogram with poor image quality from NE Greenland coast.
+### Train model:
 

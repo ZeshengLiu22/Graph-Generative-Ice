@@ -40,7 +40,7 @@ if __name__ == "__main__":
     seed_everything(seed)
 
     # Load dataset
-    dataset = load_dill('data-pretrain-no-physics/dataset') # Pretrain data with 20 layers
+    dataset = load_dill('data/perfect/dataset') # Pretrain data with 20 layers
     loader = DataLoader(dataset, batch_size=1, shuffle=True)
     print(f"Dataset loaded with {len(dataset)} graph sequences.")
 

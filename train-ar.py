@@ -36,7 +36,7 @@ if __name__ == "__main__":
     seed_everything(seed)
 
     # Load dataset
-    dataset = load_dill('data-pretrain/dataset')
+    dataset = load_dill('data/perfect/dataset')
     loader = DataLoader(dataset, batch_size=1, shuffle=True)
     print(f"Dataset loaded with {len(dataset)} graph sequences.")
 
@@ -82,7 +82,7 @@ if __name__ == "__main__":
                 graph.x = (graph.x - mean_features) / std_features
                 graph.x = graph.x.float()
 
-            a = random.randint(1, 19)
+            a = random.randint(10, 19)
             known_layers = graph_list[:a]
             target_layers = graph_list[a:20]
             edge_index = graph_list[0].edge_index

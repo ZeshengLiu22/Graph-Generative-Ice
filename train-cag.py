@@ -34,7 +34,7 @@ if __name__ == "__main__":
     torch.cuda.manual_seed_all(seed)
     seed_everything(seed)
 
-    dataset = load_dill('data-pretrain/dataset')
+    dataset = load_dill('data/perfect/dataset')
     loader = DataLoader(dataset, batch_size=1, shuffle=True)
     print(f"Dataset loaded with {len(dataset)} graph sequences.")
 
