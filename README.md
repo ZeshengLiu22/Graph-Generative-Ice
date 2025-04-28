@@ -33,7 +33,10 @@ argparse
 
 ### Data Generation:
 
+python preparedata-0422.py
 
 
 ### Train model:
+python train_ar.py --lr 0.0003 --epochs 200
 
+python train-maskAE.py --lr 0.0005 --epochs 200
